@@ -4,3 +4,4 @@ requests
 dnspython
 pyopenssl
 service_identity
+openpyxl
