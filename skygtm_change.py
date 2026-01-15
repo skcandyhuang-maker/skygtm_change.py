@@ -4,9 +4,13 @@ import re
 import io
 
 # --- 設定頁面資訊 ---
-st.set_page_config(page_title="DNS 紀錄轉換工具", page_icon="🌐", layout="wide")
+st.set_page_config(page_title="DNS 紀錄轉換工具 Pro", page_icon="🛠️", layout="wide")
 
-# --- 核心解析函式 ---
+# --- 初始化 Session State (用於管理輸入框內容) ---
+if 'dns_input' not in st.session_state:
+    st.session_state.dns_input = ""
+
+# --- 核心解析函式 (維持不變) ---
 def parse_dns_data(text):
     active_records = []
     paused_records = []
@@ -24,53 +28,41 @@ def parse_dns_data(text):
         
         if raw_line.startswith('#') or raw_line.startswith(';'):
             is_paused = True
-            # 移除開頭的標記符號，並去除前後空白
             clean_line = raw_line[1:].strip()
             
-        # 再次檢查移除符號後是否為空行
         if not clean_line:
             continue
 
-        # 2. 使用正規表達式依照空白切割
+        # 2. 切割字串
         parts = re.split(r'\s+', clean_line)
         
-        # 預設變數
+        filtered_parts = [p for p in parts if p.upper() != 'IN']
+        
         host = ""
         r_type = ""
         value = ""
-        priority = "" # 給 MX 用
+        priority = "" 
         
-        # 3. 解析邏輯
-        # 移除 'IN' (標準 BIND 格式通常有 IN，但有時會省略)
-        # 我們建立一個過濾後的列表，排除 'IN'
-        filtered_parts = [p for p in parts if p.upper() != 'IN']
-        
-        # 確保至少有 Host 和 Type
         if len(filtered_parts) >= 2:
             host = filtered_parts[0]
             
-            # 處理根網域轉換：如果有 . 結尾或是 @
+            # 根網域轉換
             if ('.' in host and host.endswith('.')) or host == "": 
                 host = '@'
             
             r_type = filtered_parts[1].upper()
             
-            # 針對 MX 紀錄處理優先級
             if r_type == 'MX' and len(filtered_parts) >= 4:
                 priority = filtered_parts[2]
                 value = filtered_parts[3]
             elif r_type == 'MX' and len(filtered_parts) == 3:
-                # 預防某些格式沒有優先級 (雖然少見) 或位置偏移
                 priority = filtered_parts[2] 
                 value = "" 
             elif len(filtered_parts) >= 3:
-                # 一般紀錄 (A, CNAME, TXT, NS...)
-                priority = ""
-                value = " ".join(filtered_parts[2:]) # 剩下的都當作值 (例如 TXT 可能有空白)
+                value = " ".join(filtered_parts[2:])
             else:
                 value = ""
 
-            # 建立資料物件
             record = {
                 "主機紀錄": host,
                 "紀錄類型": r_type,
@@ -85,21 +77,9 @@ def parse_dns_data(text):
             
     return active_records, paused_records
 
-# --- UI 介面設計 ---
-
-st.title("🌐 DNS Zone File 格式轉換器")
-st.markdown("""
-此工具可將 BIND 格式的 DNS 設定檔轉換為表格格式。
-- 自動識別 **`#`** 和 **`;`** 為暫停（註解）紀錄。
-- 自動將完整網域（結尾有 `.`）轉換為 **`@`**。
-- 自動分離 **MX** 紀錄的優先級。
-""")
-
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("1. 輸入原始資料")
-    default_input = """localhost           IN      A       127.0.0.1
+# --- 輔助函式：載入範例 ---
+def load_example():
+    st.session_state.dns_input = """localhost           IN      A       127.0.0.1
 taiwan-india.org.tw.    IN  A   203.75.177.1
 #                       IN      MX 3    mailserver.taian-electric.com.tw.
 ;mailserver             IN      A       203.75.177.50
@@ -107,11 +87,48 @@ ns1         IN      A       203.75.177.1
 ns2         IN  A   203.75.177.111
 www                     IN      A       60.251.30.110
 ;old-www                IN      CNAME   google.com"""
+
+# --- 輔助函式：讀取上傳檔案 ---
+def load_file():
+    uploaded_file = st.session_state.uploader
+    if uploaded_file is not None:
+        # 嘗試解碼檔案內容
+        stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
+        st.session_state.dns_input = stringio.read()
+
+# --- 輔助函式：清空輸入 ---
+def clear_input():
+    st.session_state.dns_input = ""
+
+# --- UI 介面設計 ---
+
+st.title("🛠️ DNS Zone File 轉換神器 (可編輯版)")
+st.markdown("貼上 DNS 設定，或上傳檔案，我們會幫您整理成表格並匯出 Excel。")
+
+col1, col2 = st.columns([1, 1.2])
+
+with col1:
+    st.subheader("1. 輸入來源")
     
-    input_text = st.text_area("請貼上 DNS 設定內容：", value=default_input, height=400)
+    # 功能按鈕區
+    btn_col1, btn_col2, btn_col3 = st.columns([0.4, 0.3, 0.3])
+    with btn_col1:
+        st.file_uploader("上傳 .txt 或 .zone 檔", type=['txt', 'zone'], key='uploader', on_change=load_file, label_visibility="collapsed")
+    with btn_col2:
+        st.button("載入範例", on_click=load_example, use_container_width=True)
+    with btn_col3:
+        st.button("🗑️ 清空", on_click=clear_input, use_container_width=True)
+
+    # 輸入框 (綁定 session_state)
+    input_text = st.text_area(
+        "或是直接在此貼上內容：", 
+        key="dns_input",
+        height=500,
+        placeholder="請貼上 BIND 格式的 DNS 設定..."
+    )
 
 with col2:
-    st.subheader("2. 轉換結果")
+    st.subheader("2. 預覽與編輯結果")
     
     if input_text:
         active_list, paused_list = parse_dns_data(input_text)
@@ -120,36 +137,39 @@ with col2:
         df_active = pd.DataFrame(active_list, columns=["主機紀錄", "紀錄類型", "紀錄值", "優先級"])
         df_paused = pd.DataFrame(paused_list, columns=["主機紀錄", "紀錄類型", "紀錄值", "優先級"])
         
-        st.info(f"偵測到：啟用紀錄 {len(df_active)} 筆 / 暫停紀錄 {len(df_paused)} 筆")
+        # 顯示統計
+        st.caption(f"📊 統計：啟用 {len(df_active)} 筆 / 暫停 {len(df_paused)} 筆")
 
-        st.markdown("### ✅ 啟用中 (Active)")
-        st.dataframe(df_active, use_container_width=True, hide_index=True)
+        st.markdown("### ✅ 啟用中 (可直接編輯下表)")
+        # 使用 data_editor 讓使用者可以修正資料
+        edited_df_active = st.data_editor(df_active, use_container_width=True, num_rows="dynamic", key="editor_active")
         
-        st.markdown("### ⏸️ 已暫停 (Paused - # 或 ; 開頭)")
-        st.dataframe(df_paused, use_container_width=True, hide_index=True)
+        st.markdown("### ⏸️ 已暫停 (可直接編輯下表)")
+        edited_df_paused = st.data_editor(df_paused, use_container_width=True, num_rows="dynamic", key="editor_paused")
 
         # --- 產生 Excel 下載 ---
+        # 注意：我們使用 edited_df (編輯後的資料) 來產生 Excel
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 寫入啟用資料
-            df_active.to_excel(writer, sheet_name='DNS設定', index=False, startrow=0)
+        try:
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                edited_df_active.to_excel(writer, sheet_name='DNS設定', index=False, startrow=0)
+                
+                start_row = len(edited_df_active) + 3
+                pd.DataFrame([["=== 以下為暫停紀錄 ===", "", "", ""]], columns=df_active.columns).to_excel(
+                    writer, sheet_name='DNS設定', index=False, startrow=start_row-1, header=False
+                )
+                edited_df_paused.to_excel(writer, sheet_name='DNS設定', index=False, startrow=start_row)
             
-            # 計算暫停資料要寫入的起始行 (空兩行)
-            start_row = len(df_active) + 3
+            processed_data = output.getvalue()
             
-            # 寫入一個標題分隔
-            pd.DataFrame([["=== 以下為暫停紀錄 ===", "", "", ""]], columns=df_active.columns).to_excel(
-                writer, sheet_name='DNS設定', index=False, startrow=start_row-1, header=False
+            st.download_button(
+                label="📥 下載 Excel (包含您的修改)",
+                data=processed_data,
+                file_name="dns_records_custom.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
             )
-            
-            # 寫入暫停資料
-            df_paused.to_excel(writer, sheet_name='DNS設定', index=False, startrow=start_row)
-
-        processed_data = output.getvalue()
-        
-        st.download_button(
-            label="📥 下載 Excel 檔案",
-            data=processed_data,
-            file_name="dns_records_converted.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        except ModuleNotFoundError:
+            st.error("⚠️ 系統缺少 'openpyxl' 套件。請確認您已安裝該套件 (pip install openpyxl)。")
+    else:
+        st.info("👈 請在左側輸入資料或上傳檔案以開始轉換。")
